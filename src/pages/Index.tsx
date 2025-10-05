@@ -7,105 +7,110 @@ import { supabase } from "@/integrations/supabase/client";
 
 const Index = () => {
   const [mailRooms, setMailRooms] = useState<Record<string, MailRoom>>({});
-  const [loading, setLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(true);
 
-  // Fetch mail rooms from database
-  const fetchMailRooms = async () => {
-    const { data, error } = await supabase
-      .from("mail_rooms")
-      .select("*");
-
-    if (error) {
-      console.error("Error fetching mail rooms:", error);
-      toast.error("Failed to load mail room data");
-      return;
+  // Calculate status with 30-minute expiration
+  const getEffectiveStatus = (status: string, lastUpdated: string | null): MailRoomStatus => {
+    if (!lastUpdated) return "unknown";
+    
+    const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
+    const updateTime = new Date(lastUpdated);
+    
+    if (updateTime < thirtyMinutesAgo) {
+      return "unknown";
     }
+    
+    return status as MailRoomStatus;
+  };
 
-    if (data) {
+  // Load initial data from database
+  const loadMailRooms = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('mail_rooms')
+        .select('*')
+        .order('name');
+
+      if (error) throw error;
+
       const roomsMap: Record<string, MailRoom> = {};
-      const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
-
-      data.forEach((room) => {
-        const lastUpdated = new Date(room.last_updated);
-        const isExpired = lastUpdated < thirtyMinutesAgo;
-        
+      data?.forEach((room) => {
         roomsMap[room.name] = {
           name: room.name,
-          status: isExpired ? "unknown" : (room.status as MailRoomStatus),
-          lastUpdated: lastUpdated,
+          status: getEffectiveStatus(room.status, room.last_updated),
+          lastUpdated: room.last_updated ? new Date(room.last_updated) : null,
         };
       });
 
       setMailRooms(roomsMap);
+    } catch (error) {
+      console.error('Error loading mail rooms:', error);
+      toast.error('Failed to load mail room data');
+    } finally {
+      setIsLoading(false);
     }
-    setLoading(false);
   };
 
-  // Load data on mount
+  // Subscribe to realtime updates
   useEffect(() => {
-    fetchMailRooms();
+    loadMailRooms();
 
-    // Set up realtime subscription
     const channel = supabase
-      .channel("mail_rooms_changes")
+      .channel('mail-rooms-changes')
       .on(
-        "postgres_changes",
+        'postgres_changes',
         {
-          event: "*",
-          schema: "public",
-          table: "mail_rooms",
+          event: '*',
+          schema: 'public',
+          table: 'mail_rooms'
         },
-        () => {
-          fetchMailRooms();
+        (payload) => {
+          console.log('Realtime update:', payload);
+          loadMailRooms();
         }
       )
       .subscribe();
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, []);
-
-  // Check for expired statuses every minute
-  useEffect(() => {
+    // Refresh statuses every minute to update the 30-minute expiration
     const interval = setInterval(() => {
       setMailRooms((prev) => {
-        const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
         const updated = { ...prev };
-        let hasChanges = false;
-
-        Object.keys(updated).forEach((hallName) => {
-          const room = updated[hallName];
-          if (room.lastUpdated && room.lastUpdated < thirtyMinutesAgo && room.status !== "unknown") {
-            updated[hallName] = { ...room, status: "unknown" };
-            hasChanges = true;
+        Object.keys(updated).forEach((key) => {
+          if (updated[key].lastUpdated) {
+            const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
+            if (updated[key].lastUpdated! < thirtyMinutesAgo && updated[key].status !== 'unknown') {
+              updated[key] = { ...updated[key], status: 'unknown' };
+            }
           }
         });
-
-        return hasChanges ? updated : prev;
+        return updated;
       });
     }, 60000); // Check every minute
 
-    return () => clearInterval(interval);
+    return () => {
+      supabase.removeChannel(channel);
+      clearInterval(interval);
+    };
   }, []);
 
   const handleUpdateStatus = async (hallName: string, status: MailRoomStatus) => {
-    const { error } = await supabase
-      .from("mail_rooms")
-      .update({
-        status,
-        last_updated: new Date().toISOString(),
-      })
-      .eq("name", hallName);
+    try {
+      const { error } = await supabase
+        .from('mail_rooms')
+        .update({
+          status,
+          last_updated: new Date().toISOString(),
+        })
+        .eq('name', hallName);
 
-    if (error) {
-      console.error("Error updating status:", error);
-      toast.error("Failed to update status");
-      return;
+      if (error) throw error;
+
+      const statusText = status === "open" ? "open" : "closed";
+      toast.success(`${hallName} mail room marked as ${statusText}`);
+    } catch (error) {
+      console.error('Error updating status:', error);
+      toast.error('Failed to update status');
     }
-
-    const statusText = status === "open" ? "open" : "closed";
-    toast.success(`${hallName} mail room marked as ${statusText}`);
   };
 
   const neighborhoods = {
@@ -137,6 +142,17 @@ const Index = () => {
     ],
   };
 
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-center">
+          <Mail className="h-12 w-12 text-primary mx-auto mb-4 animate-pulse" />
+          <p className="text-muted-foreground">Loading mail room status...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-background">
       <header className="bg-primary text-primary-foreground py-6 px-4 shadow-md">
@@ -152,31 +168,24 @@ const Index = () => {
       </header>
 
       <main className="container mx-auto px-4 py-8">
-        {loading ? (
-          <div className="text-center py-12">
-            <p className="text-muted-foreground">Loading mail room status...</p>
-          </div>
-        ) : (
-          <>
-            {Object.entries(neighborhoods).map(([neighborhood, halls]) => (
-              <NeighborhoodSection key={neighborhood} title={neighborhood}>
-                {halls.map((hall) => (
-                  <MailRoomCard
-                    key={hall}
-                    mailRoom={mailRooms[hall]}
-                    onUpdateStatus={(status) => handleUpdateStatus(hall, status)}
-                  />
-                ))}
-              </NeighborhoodSection>
+        {Object.entries(neighborhoods).map(([neighborhood, halls]) => (
+          <NeighborhoodSection key={neighborhood} title={neighborhood}>
+            {halls.map((hall) => (
+              <MailRoomCard
+                key={hall}
+                mailRoom={mailRooms[hall] || { name: hall, status: "unknown", lastUpdated: null }}
+                onUpdateStatus={(status) => handleUpdateStatus(hall, status)}
+              />
             ))}
-          </>
-        )}
+          </NeighborhoodSection>
+        ))}
       </main>
 
       <footer className="bg-card border-t mt-12 py-6">
         <div className="container mx-auto px-4 text-center text-sm text-muted-foreground">
           <p>Community-powered mail room status tracker</p>
           <p className="mt-1">Help your fellow Orange by reporting mail room status!</p>
+          <p className="mt-2 text-xs">Status automatically resets to unknown after 30 minutes</p>
         </div>
       </footer>
     </div>
