@@ -1,48 +1,109 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Mail } from "lucide-react";
 import MailRoomCard, { MailRoom, MailRoomStatus } from "@/components/MailRoomCard";
 import NeighborhoodSection from "@/components/NeighborhoodSection";
 import { toast } from "sonner";
+import { supabase } from "@/integrations/supabase/client";
 
 const Index = () => {
-  const [mailRooms, setMailRooms] = useState<Record<string, MailRoom>>({
-    // East Neighborhood
-    "DellPlain Hall": { name: "DellPlain Hall", status: "unknown", lastUpdated: null },
-    "Ernie Davis Hall": { name: "Ernie Davis Hall", status: "unknown", lastUpdated: null },
-    "Oren Lyons Hall": { name: "Oren Lyons Hall", status: "unknown", lastUpdated: null },
-    "Shaw Hall": { name: "Shaw Hall", status: "unknown", lastUpdated: null },
-    "Watson Hall": { name: "Watson Hall", status: "unknown", lastUpdated: null },
-    
-    // Mount Olympus Neighborhood
-    "Day Hall": { name: "Day Hall", status: "unknown", lastUpdated: null },
-    "Flint Hall": { name: "Flint Hall", status: "unknown", lastUpdated: null },
-    
-    // North Neighborhood
-    "Booth Hall": { name: "Booth Hall", status: "unknown", lastUpdated: null },
-    "Haven Hall": { name: "Haven Hall", status: "unknown", lastUpdated: null },
-    "Milton Hall": { name: "Milton Hall", status: "unknown", lastUpdated: null },
-    "Orange Hall": { name: "Orange Hall", status: "unknown", lastUpdated: null },
-    "Walnut Hall": { name: "Walnut Hall", status: "unknown", lastUpdated: null },
-    "Washington Arms Hall": { name: "Washington Arms Hall", status: "unknown", lastUpdated: null },
-    
-    // West Neighborhood
-    "Boland Hall": { name: "Boland Hall", status: "unknown", lastUpdated: null },
-    "Brewster Hall": { name: "Brewster Hall", status: "unknown", lastUpdated: null },
-    "Brockway Hall": { name: "Brockway Hall", status: "unknown", lastUpdated: null },
-    "Lawrinson Hall": { name: "Lawrinson Hall", status: "unknown", lastUpdated: null },
-    "Sadler Hall": { name: "Sadler Hall", status: "unknown", lastUpdated: null },
-  });
+  const [mailRooms, setMailRooms] = useState<Record<string, MailRoom>>({});
+  const [loading, setLoading] = useState(true);
 
-  const handleUpdateStatus = (hallName: string, status: MailRoomStatus) => {
-    setMailRooms((prev) => ({
-      ...prev,
-      [hallName]: {
-        ...prev[hallName],
+  // Fetch mail rooms from database
+  const fetchMailRooms = async () => {
+    const { data, error } = await supabase
+      .from("mail_rooms")
+      .select("*");
+
+    if (error) {
+      console.error("Error fetching mail rooms:", error);
+      toast.error("Failed to load mail room data");
+      return;
+    }
+
+    if (data) {
+      const roomsMap: Record<string, MailRoom> = {};
+      const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
+
+      data.forEach((room) => {
+        const lastUpdated = new Date(room.last_updated);
+        const isExpired = lastUpdated < thirtyMinutesAgo;
+        
+        roomsMap[room.name] = {
+          name: room.name,
+          status: isExpired ? "unknown" : (room.status as MailRoomStatus),
+          lastUpdated: lastUpdated,
+        };
+      });
+
+      setMailRooms(roomsMap);
+    }
+    setLoading(false);
+  };
+
+  // Load data on mount
+  useEffect(() => {
+    fetchMailRooms();
+
+    // Set up realtime subscription
+    const channel = supabase
+      .channel("mail_rooms_changes")
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "mail_rooms",
+        },
+        () => {
+          fetchMailRooms();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  // Check for expired statuses every minute
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setMailRooms((prev) => {
+        const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
+        const updated = { ...prev };
+        let hasChanges = false;
+
+        Object.keys(updated).forEach((hallName) => {
+          const room = updated[hallName];
+          if (room.lastUpdated && room.lastUpdated < thirtyMinutesAgo && room.status !== "unknown") {
+            updated[hallName] = { ...room, status: "unknown" };
+            hasChanges = true;
+          }
+        });
+
+        return hasChanges ? updated : prev;
+      });
+    }, 60000); // Check every minute
+
+    return () => clearInterval(interval);
+  }, []);
+
+  const handleUpdateStatus = async (hallName: string, status: MailRoomStatus) => {
+    const { error } = await supabase
+      .from("mail_rooms")
+      .update({
         status,
-        lastUpdated: new Date(),
-      },
-    }));
-    
+        last_updated: new Date().toISOString(),
+      })
+      .eq("name", hallName);
+
+    if (error) {
+      console.error("Error updating status:", error);
+      toast.error("Failed to update status");
+      return;
+    }
+
     const statusText = status === "open" ? "open" : "closed";
     toast.success(`${hallName} mail room marked as ${statusText}`);
   };
@@ -91,17 +152,25 @@ const Index = () => {
       </header>
 
       <main className="container mx-auto px-4 py-8">
-        {Object.entries(neighborhoods).map(([neighborhood, halls]) => (
-          <NeighborhoodSection key={neighborhood} title={neighborhood}>
-            {halls.map((hall) => (
-              <MailRoomCard
-                key={hall}
-                mailRoom={mailRooms[hall]}
-                onUpdateStatus={(status) => handleUpdateStatus(hall, status)}
-              />
+        {loading ? (
+          <div className="text-center py-12">
+            <p className="text-muted-foreground">Loading mail room status...</p>
+          </div>
+        ) : (
+          <>
+            {Object.entries(neighborhoods).map(([neighborhood, halls]) => (
+              <NeighborhoodSection key={neighborhood} title={neighborhood}>
+                {halls.map((hall) => (
+                  <MailRoomCard
+                    key={hall}
+                    mailRoom={mailRooms[hall]}
+                    onUpdateStatus={(status) => handleUpdateStatus(hall, status)}
+                  />
+                ))}
+              </NeighborhoodSection>
             ))}
-          </NeighborhoodSection>
-        ))}
+          </>
+        )}
       </main>
 
       <footer className="bg-card border-t mt-12 py-6">
