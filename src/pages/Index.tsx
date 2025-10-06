@@ -65,11 +65,16 @@ const Index = () => {
           table: 'mail_rooms'
         },
         (payload) => {
-          console.log('Realtime update:', payload);
+          console.log('Realtime update received:', payload);
           loadMailRooms();
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log('Realtime subscription status:', status);
+        if (status === 'SUBSCRIBED') {
+          console.log('Successfully subscribed to mail_rooms changes');
+        }
+      });
 
     // Refresh statuses every minute to update the 30-minute expiration
     const interval = setInterval(() => {
