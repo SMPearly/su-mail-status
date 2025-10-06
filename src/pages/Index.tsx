@@ -76,7 +76,7 @@ const Index = () => {
         }
       });
 
-    // Refresh statuses every minute to update the 30-minute expiration
+    // Refresh statuses every second to update the 30-minute expiration
     const interval = setInterval(() => {
       setMailRooms((prev) => {
         const updated = { ...prev };
@@ -90,7 +90,7 @@ const Index = () => {
         });
         return updated;
       });
-    }, 60000); // Check every minute
+    }, 1000); // Check every second
 
     return () => {
       supabase.removeChannel(channel);
