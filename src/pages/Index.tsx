@@ -94,12 +94,23 @@ const Index = () => {
   }, []);
 
   const handleUpdateStatus = async (hallName: string, status: MailRoomStatus) => {
+    // Optimistically update local state for instant feedback
+    const now = new Date();
+    setMailRooms((prev) => ({
+      ...prev,
+      [hallName]: {
+        name: hallName,
+        status,
+        lastUpdated: now,
+      },
+    }));
+
     try {
       const { error } = await supabase
         .from('mail_rooms')
         .update({
           status,
-          last_updated: new Date().toISOString(),
+          last_updated: now.toISOString(),
         })
         .eq('name', hallName);
 
@@ -110,6 +121,8 @@ const Index = () => {
     } catch (error) {
       console.error('Error updating status:', error);
       toast.error('Failed to update status');
+      // Reload from database on error to revert optimistic update
+      loadMailRooms();
     }
   };
 
