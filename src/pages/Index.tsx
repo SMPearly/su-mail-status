@@ -230,6 +230,8 @@ const Index = () => {
           <p>Community-powered mail room status tracker</p>
           <p className="mt-1">Help your fellow Orange by reporting mail room status!</p>
           <p className="mt-2 text-xs">Status automatically resets to unknown after 30 minutes</p>
+          <p className="mt-2 text-xs">Please note that this page does not automatically update, you may have to refresh the page</p>
+          <p className="mt-2 text-xs">Questions? Email me at smperl@icloud.com</p>
         </div>
       </footer>
     </div>
