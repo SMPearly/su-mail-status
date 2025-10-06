@@ -78,7 +78,7 @@ const MailRoomCard = ({ mailRoom, onUpdateStatus }: MailRoomCardProps) => {
         <div className="flex gap-2">
           <Button
             size="sm"
-            variant={mailRoom.status === "open" ? "default" : "outline"}
+            variant={mailRoom.status === "open" ? "success" : "outline"}
             className="flex-1"
             onClick={() => onUpdateStatus("open")}
           >
