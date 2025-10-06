@@ -12,14 +12,9 @@ const Index = () => {
   // Calculate status with 30-minute expiration
   const getEffectiveStatus = (status: string, lastUpdated: string | null): MailRoomStatus => {
     if (!lastUpdated) return "unknown";
-    
     const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
     const updateTime = new Date(lastUpdated);
-    
-    if (updateTime < thirtyMinutesAgo) {
-      return "unknown";
-    }
-    
+    if (updateTime < thirtyMinutesAgo) return "unknown";
     return status as MailRoomStatus;
   };
 
@@ -41,7 +36,6 @@ const Index = () => {
           lastUpdated: room.last_updated ? new Date(room.last_updated) : null,
         };
       });
-
       setMailRooms(roomsMap);
     } catch (error) {
       console.error('Error loading mail rooms:', error);
@@ -51,46 +45,76 @@ const Index = () => {
     }
   };
 
+  // Helper to apply a single row change to local state (no full refetch)
+  const upsertFromRow = (row: any) => {
+    setMailRooms(prev => ({
+      ...prev,
+      [row.name]: {
+        name: row.name,
+        status: getEffectiveStatus(row.status, row.last_updated),
+        lastUpdated: row.last_updated ? new Date(row.last_updated) : null,
+      }
+    }));
+  };
+
+  const removeByRow = (row: any) => {
+    setMailRooms(prev => {
+      const copy = { ...prev };
+      delete copy[row.name];
+      return copy;
+    });
+  };
+
   // Subscribe to realtime updates
   useEffect(() => {
+    // initial load
     loadMailRooms();
 
+    // precise event handlers so other clients update immediately
     const channel = supabase
-      .channel('mail-rooms-changes')
+      .channel('public:mail_rooms')
       .on(
         'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'mail_rooms'
-        },
+        { event: 'INSERT', schema: 'public', table: 'mail_rooms' },
         (payload) => {
-          console.log('Realtime update received:', payload);
-          loadMailRooms();
+          // payload.new is the inserted row
+          upsertFromRow(payload.new);
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'mail_rooms' },
+        (payload) => {
+          // payload.new is the updated row (e.g., open -> closed)
+          upsertFromRow(payload.new);
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'DELETE', schema: 'public', table: 'mail_rooms' },
+        (payload) => {
+          // payload.old is the deleted row
+          removeByRow(payload.old);
         }
       )
       .subscribe((status) => {
         console.log('Realtime subscription status:', status);
-        if (status === 'SUBSCRIBED') {
-          console.log('Successfully subscribed to mail_rooms changes');
-        }
       });
 
     // Refresh statuses every second to update the 30-minute expiration
     const interval = setInterval(() => {
       setMailRooms((prev) => {
         const updated = { ...prev };
-        Object.keys(updated).forEach((key) => {
-          if (updated[key].lastUpdated) {
-            const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
-            if (updated[key].lastUpdated! < thirtyMinutesAgo && updated[key].status !== 'unknown') {
-              updated[key] = { ...updated[key], status: 'unknown' };
-            }
+        const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
+        for (const key of Object.keys(updated)) {
+          const r = updated[key];
+          if (r.lastUpdated && r.lastUpdated < thirtyMinutesAgo && r.status !== 'unknown') {
+            updated[key] = { ...r, status: 'unknown' };
           }
-        });
+        }
         return updated;
       });
-    }, 1000); // Check every second
+    }, 1000);
 
     return () => {
       supabase.removeChannel(channel);
@@ -99,7 +123,7 @@ const Index = () => {
   }, []);
 
   const handleUpdateStatus = async (hallName: string, status: MailRoomStatus) => {
-    // Optimistically update local state for instant feedback
+    // Optimistic update for the clicking client
     const now = new Date();
     setMailRooms((prev) => ({
       ...prev,
@@ -123,10 +147,12 @@ const Index = () => {
 
       const statusText = status === "open" ? "open" : "closed";
       toast.success(`${hallName} mail room marked as ${statusText}`);
+      // No refetch necessary: other clients will get the UPDATE via realtime,
+      // and this client already applied the optimistic change.
     } catch (error) {
       console.error('Error updating status:', error);
       toast.error('Failed to update status');
-      // Reload from database on error to revert optimistic update
+      // Re-sync if the update failed
       loadMailRooms();
     }
   };
