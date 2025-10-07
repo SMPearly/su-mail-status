@@ -70,9 +70,19 @@ const Index = () => {
     // initial load
     loadMailRooms();
 
-    // Subscribe to realtime updates
+    // Test simple broadcast first to verify realtime works
+    const testChannel = supabase
+      .channel('test-broadcast')
+      .on('broadcast', { event: 'test' }, (payload) => {
+        console.log('✅ Broadcast test received:', payload);
+      })
+      .subscribe((status) => {
+        console.log('Test broadcast status:', status);
+      });
+
+    // Main postgres_changes subscription
     const channel = supabase
-      .channel('schema-db-changes')
+      .channel('mail_rooms_channel')
       .on(
         'postgres_changes',
         {
@@ -91,10 +101,22 @@ const Index = () => {
           }
         }
       )
-      .subscribe((status) => {
-        console.log('Realtime status:', status);
+      .subscribe((status, err) => {
+        console.log('Realtime subscription status:', status);
+        if (err) {
+          console.error('Realtime subscription error:', err);
+        }
         if (status === 'SUBSCRIBED') {
-          console.log('✅ Realtime connected successfully');
+          console.log('✅ Successfully subscribed to mail_rooms changes');
+        } else if (status === 'CHANNEL_ERROR') {
+          console.error('❌ CHANNEL_ERROR - Check:');
+          console.error('1. REPLICA IDENTITY FULL is set');
+          console.error('2. Table is in supabase_realtime publication');
+          console.error('3. RLS policies allow access');
+        } else if (status === 'TIMED_OUT') {
+          console.error('❌ Connection timed out');
+        } else if (status === 'CLOSED') {
+          console.warn('⚠️ Channel closed');
         }
       });
 
@@ -114,6 +136,7 @@ const Index = () => {
     }, 1000);
 
     return () => {
+      supabase.removeChannel(testChannel);
       supabase.removeChannel(channel);
       clearInterval(interval);
     };
