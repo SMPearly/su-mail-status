@@ -72,37 +72,35 @@ const Index = () => {
 
     // precise event handlers so other clients update immediately
     const channel = supabase
-      .channel('mail_rooms_changes')
+      .channel('mail_rooms_changes', {
+        config: {
+          broadcast: { self: true },
+          presence: { key: '' },
+        },
+      })
       .on(
         'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'mail_rooms' },
+        { 
+          event: '*', 
+          schema: 'public', 
+          table: 'mail_rooms' 
+        },
         (payload) => {
-          console.log('INSERT received:', payload.new);
-          upsertFromRow(payload.new);
+          console.log('Realtime event:', payload);
+          if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+            upsertFromRow(payload.new);
+          } else if (payload.eventType === 'DELETE') {
+            removeByRow(payload.old);
+          }
         }
       )
-      .on(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'mail_rooms' },
-        (payload) => {
-          console.log('UPDATE received:', payload.new);
-          upsertFromRow(payload.new);
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: 'DELETE', schema: 'public', table: 'mail_rooms' },
-        (payload) => {
-          console.log('DELETE received:', payload.old);
-          removeByRow(payload.old);
-        }
-      )
-      .subscribe((status) => {
+      .subscribe((status, err) => {
         console.log('Realtime subscription status:', status);
+        if (err) console.error('Subscription error:', err);
         if (status === 'SUBSCRIBED') {
           console.log('✅ Successfully subscribed to realtime updates');
-        } else if (status === 'CHANNEL_ERROR') {
-          console.error('❌ Channel error - realtime may not be working');
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.error('❌ Realtime connection failed:', status);
         }
       });
 
