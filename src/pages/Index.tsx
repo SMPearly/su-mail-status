@@ -72,12 +72,12 @@ const Index = () => {
 
     // precise event handlers so other clients update immediately
     const channel = supabase
-      .channel('public:mail_rooms')
+      .channel('mail_rooms_changes')
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'mail_rooms' },
         (payload) => {
-          // payload.new is the inserted row
+          console.log('INSERT received:', payload.new);
           upsertFromRow(payload.new);
         }
       )
@@ -85,7 +85,7 @@ const Index = () => {
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'mail_rooms' },
         (payload) => {
-          // payload.new is the updated row (e.g., open -> closed)
+          console.log('UPDATE received:', payload.new);
           upsertFromRow(payload.new);
         }
       )
@@ -93,12 +93,17 @@ const Index = () => {
         'postgres_changes',
         { event: 'DELETE', schema: 'public', table: 'mail_rooms' },
         (payload) => {
-          // payload.old is the deleted row
+          console.log('DELETE received:', payload.old);
           removeByRow(payload.old);
         }
       )
       .subscribe((status) => {
         console.log('Realtime subscription status:', status);
+        if (status === 'SUBSCRIBED') {
+          console.log('✅ Successfully subscribed to realtime updates');
+        } else if (status === 'CHANNEL_ERROR') {
+          console.error('❌ Channel error - realtime may not be working');
+        }
       });
 
     // Refresh statuses every second to update the 30-minute expiration
@@ -230,7 +235,7 @@ const Index = () => {
           <p>Community-powered mail room status tracker</p>
           <p className="mt-1">Help your fellow Orange by reporting mail room status!</p>
           <p className="mt-2 text-xs">Status automatically resets to unknown after 30 minutes</p>
-          <p className="mt-2 text-xs">Please note that this page does not automatically update, you may have to refresh the page</p>
+          <p className="mt-2 text-xs">Updates sync in real-time across all devices</p>
           <p className="mt-2 text-xs">Questions? Email me at smperl@icloud.com</p>
         </div>
       </footer>
